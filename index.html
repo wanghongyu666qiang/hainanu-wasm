@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>海南大学智慧校园导航系统</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Microsoft YaHei',sans-serif;display:flex;height:100vh;background:#f0f2f5;user-select:none}
+#map-area{flex:1;display:flex;align-items:center;justify-content:center;background:#fff;margin:12px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);cursor:default}
+#panel{width:230px;padding:20px;background:#fff;margin:12px 12px 12px 0;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);display:flex;flex-direction:column;gap:14px}
+h2{font-size:16px;color:#1a1a2e;border-bottom:2px solid #4a6cf7;padding-bottom:8px}
+.mode-btn{padding:8px 0;border:2px solid #ddd;border-radius:8px;font-size:13px;cursor:pointer;text-align:center;transition:all .2s;background:#fff}
+.mode-btn.active{border-color:#4a6cf7;background:#e6f1fb;color:#185fa5;font-weight:bold}
+.mode-btn:hover{border-color:#4a6cf7}
+.status-text{font-size:12px;color:#666;line-height:1.8}
+.tag-start{display:inline-block;width:10px;height:10px;border-radius:50%;background:#e24b4b;margin-right:4px;vertical-align:middle}
+.tag-end{display:inline-block;width:10px;height:10px;border-radius:50%;background:#4a6cf7;margin-right:4px;vertical-align:middle}
+.btn-action{width:100%;padding:10px;border:none;border-radius:8px;font-size:13px;cursor:pointer}
+.btn-reset{background:#f0f0f0;color:#666}
+.btn-reset:hover{background:#e0e0e0}
+.result-box{background:#fef5f0;border:1px solid #f0c0a0;border-radius:8px;padding:12px;font-size:12px;line-height:1.8}
+.result-box .dist{font-size:24px;font-weight:bold;color:#d85a30}
+.spot{cursor:pointer;transition:r .15s}
+.spot:hover{filter:brightness(1.15)}
+.hint{font-size:11px;color:#aaa;text-align:center}
+.loading{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-size:14px;color:#888}
+</style>
+</head>
+<body>
+
+<div id="map-area">
+<svg id="map-svg" viewBox="0 0 800 550" width="100%" height="100%">
+<text x="400" y="28" text-anchor="middle" font-size="16" fill="#333" font-weight="bold">海南大学校园地图 - 点击景点开始导航</text>
+<g id="roads-layer"></g>
+<g id="path-layer"></g>
+<g id="spots-layer"></g>
+</svg>
+</div>
+
+<div id="panel">
+<h2>导航控制</h2>
+<div><div id="mode-walk" class="mode-btn active" onclick="setMode(0)">步行模式</div></div>
+<div><div id="mode-car" class="mode-btn" onclick="setMode(1)" style="margin-top:6px">车行模式</div></div>
+<div class="status-text" id="status">
+<div><span class="tag-start"></span>起点：<b id="lbl-start">未选择</b></div>
+<div style="margin-top:4px"><span class="tag-end"></span>终点：<b id="lbl-end">未选择</b></div>
+</div>
+<div id="spot-info" style="display:none;background:#f8f4ff;border:1px solid #d4c4f0;border-radius:8px;padding:10px;font-size:11px;color:#555;line-height:1.5"></div>
+<div><div class="btn-action btn-reset" onclick="resetAll()">重置选择</div></div>
+<div><div class="btn-action" onclick="runDFS()" style="background:#fff;color:#534ab7;border:1.5px solid #7f77dd;margin-bottom:8px">查询所有路径</div></div>
+<div id="result-panel"><div class="hint">点击地图上的景点选择起点和终点</div></div>
+<div style="font-size:10px;color:#bbb;text-align:center;margin-top:auto">实线=步行道 | 虚线=车行道<br>红点=起点 | 蓝点=终点</div>
+</div>
+
+<div id="loading-msg" class="loading">正在加载C++算法引擎...</div>
+
+<script src="main.js"></script>
+<script>
+var spots=[];
+var walkAdj=[],carAdj=[];
+var selectedStart=null,selectedEnd=null,currentMode=0;
+var ModuleReady=false;
+
+//坐标
+var coords={
+  1:{x:250,y:180},2:{x:420,y:150},3:{x:320,y:120},4:{x:350,y:230},
+  5:{x:180,y:300},6:{x:280,y:430},7:{x:430,y:290},8:{x:350,y:500},
+  9:{x:580,y:200},10:{x:220,y:400}
+};
+var names={"1":"第一食堂","2":"行政楼","3":"二号教学楼","4":"九教","5":"一田",
+  "6":"书院宿舍楼","7":"图书馆","8":"南门","9":"东门","10":"游泳池"};
+var descs={"1":"美味的地方","2":"办公的地方","3":"学习的地方","4":"计算机中心",
+  "5":"运动的地方","6":"睡觉的地方","7":"看书自习的好去处","8":"学校正大门",
+  "9":"靠近小吃街","10":"夏日消暑的地方"};
+
+//路网
+var roads=[{f:1,t:2,w:3,ty:0},{f:2,t:3,w:2,ty:0},{f:1,t:4,w:5,ty:0},{f:1,t:9,w:3,ty:0},{f:3,t:7,w:3,ty:0},{f:4,t:5,w:6,ty:0},{f:5,t:10,w:3,ty:0},{f:6,t:1,w:6,ty:0},{f:7,t:8,w:6,ty:0},{f:7,t:9,w:5,ty:0},{f:8,t:9,w:7,ty:0},{f:7,t:5,w:5,ty:0},{f:2,t:3,w:4,ty:1},{f:2,t:7,w:2,ty:1},{f:2,t:8,w:10,ty:1},{f:3,t:4,w:2,ty:1},{f:4,t:9,w:7,ty:1},{f:5,t:6,w:4,ty:1},{f:6,t:10,w:5,ty:1},{f:1,t:2,w:1,ty:1},{f:1,t:8,w:6,ty:1},{f:3,t:5,w:3,ty:1},{f:4,t:7,w:3,ty:1},{f:8,t:10,w:4,ty:1}];
+
+function initAdj(){
+  for(var i=0;i<=10;i++){walkAdj[i]=[];carAdj[i]=[];for(var j=0;j<=10;j++){walkAdj[i][j]=Infinity;carAdj[i][j]=Infinity;}}
+  for(var i=1;i<=10;i++)walkAdj[i][i]=carAdj[i][i]=0;
+  for(var i=0;i<roads.length;i++){
+    var r=roads[i];
+    if(r.ty==0){walkAdj[r.f][r.t]=r.w;walkAdj[r.t][r.f]=r.w;}
+    else{carAdj[r.f][r.t]=r.w;carAdj[r.t][r.f]=r.w;}
+  }
+}
+
+function buildSpots(){
+  for(var i=1;i<=10;i++){
+    var p=coords[i];spots.push({id:i,name:names[i],desc:descs[i],x:p.x,y:p.y});
+  }
+}
+
+function drawMap(){
+  var rl=document.getElementById('roads-layer'),sl=document.getElementById('spots-layer');
+  rl.innerHTML='';sl.innerHTML='';
+  for(var i=0;i<roads.length;i++){
+    var r=roads[i],p1=coords[r.f],p2=coords[r.t];
+    var dash=r.ty==1?'stroke-dasharray="8,4"':'';
+    var cls=r.ty==0?'road-walk':'road-car';
+    rl.innerHTML+='<line class="'+cls+'" data-from="'+(r.f-1)+'" data-to="'+(r.t-1)+'" data-type="'+r.ty+'" x1="'+p1.x+'" y1="'+p1.y+'" x2="'+p2.x+'" y2="'+p2.y+'" stroke="'+(r.ty==0?'#c0c0c0':'#a0a0a0')+'" stroke-width="1.5" '+dash+'/>';
+    var mx=(p1.x+p2.x)/2,my=(p1.y+p2.y)/2;
+    if(r.ty==0||!hasWalkRoad(r.f-1,r.t-1)){
+      rl.innerHTML+='<rect x="'+(mx-10)+'" y="'+(my-10)+'" width="20" height="16" rx="4" fill="white" opacity="0.85"/>';
+      rl.innerHTML+='<text x="'+mx+'" y="'+(my+2)+'" text-anchor="middle" font-size="9" fill="#999">'+r.w+'</text>';
+    }
+  }
+  for(var i=0;i<spots.length;i++){
+    var s=spots[i],p=coords[s.id];
+    sl.innerHTML+='<g class="spot" data-index="'+i+'" onclick="selectSpot('+i+')"><circle cx="'+p.x+'" cy="'+(p.y+1)+'" r="8" fill="rgba(0,0,0,.1)"/><circle cx="'+p.x+'" cy="'+p.y+'" r="7" fill="#7f77dd" stroke="#534ab7" stroke-width="2"/><text x="'+p.x+'" y="'+(p.y-14)+'" text-anchor="middle" font-size="12" fill="#333" font-weight="bold">'+s.name+'</text><text x="'+p.x+'" y="'+(p.y+4)+'" text-anchor="middle" font-size="9" fill="white" font-weight="bold">'+s.id+'</text></g>';
+  }
+}
+
+function hasWalkRoad(i,j){
+  for(var k=0;k<roads.length;k++)if(roads[k].ty==0&&((roads[k].f-1==i&&roads[k].t-1==j)||(roads[k].f-1==j&&roads[k].t-1==i)))return true;
+  return false;
+}
+
+Module.onRuntimeInitialized=function(){
+  ModuleReady=true;
+  document.getElementById('loading-msg').style.display='none';
+  initAdj();buildSpots();drawMap();updateRoadDisplay();
+};
+
+function selectSpot(idx){
+  if(selectedStart===null){selectedStart=idx;updateUI();return;}
+  if(selectedStart===idx){selectedStart=null;selectedEnd=null;updateUI();return;}
+  selectedEnd=idx;updateUI();runDijkstra();
+}
+function setMode(m){currentMode=m;document.getElementById('mode-walk').className='mode-btn'+(m===0?' active':'');document.getElementById('mode-car').className='mode-btn'+(m===1?' active':'');if(selectedStart!==null&&selectedEnd!==null)runDijkstra();else updateRoadDisplay();}
+function updateRoadDisplay(){var lines=document.querySelectorAll('#roads-layer line');for(var i=0;i<lines.length;i++){var t=parseInt(lines[i].getAttribute('data-type'));lines[i].setAttribute('opacity',currentMode===t?'1':'0.15');}}
+function updateUI(){
+  var sp=spots;
+  document.getElementById('lbl-start').textContent=selectedStart!==null?sp[selectedStart].name:'未选择';
+  document.getElementById('lbl-end').textContent=selectedEnd!==null?sp[selectedEnd].name:'未选择';
+  var groups=document.querySelectorAll('#spots-layer .spot');
+  for(var i=0;i<groups.length;i++){var cs=groups[i].querySelectorAll('circle');var c=cs[1];if(i===selectedStart){c.setAttribute('fill','#e24b4b');c.setAttribute('stroke','#a32d2d');c.setAttribute('r','10');}else if(i===selectedEnd){c.setAttribute('fill','#4a6cf7');c.setAttribute('stroke','#185fa5');c.setAttribute('r','10');}else{c.setAttribute('fill','#7f77dd');c.setAttribute('stroke','#534ab7');c.setAttribute('r','7');}}
+  var si=document.getElementById('spot-info');if(selectedStart!==null){si.style.display='block';si.innerHTML='<b>'+sp[selectedStart].name+'</b><br>'+sp[selectedStart].desc;}else{si.style.display='none';}
+}
+
+//C++ WebAssembly版Dijkstra
+function runDijkstra(){
+  if(!ModuleReady||selectedStart===null||selectedEnd===null)return;
+  var s=selectedStart,e=selectedEnd;
+  //调用C++ dijkstra(mode,start,end)
+  var resultPtr=Module.ccall('dijkstra','number',['number','number','number'],[currentMode,s,e]);
+  var result=Module.UTF8ToString(resultPtr);
+  var layer=document.getElementById('path-layer');layer.innerHTML='';
+  if(result==='NO_PATH'){
+    document.getElementById('result-panel').innerHTML='<div class="result-box" style="background:#fcebeb;border-color:#f09595"><div style="color:#e24b4b;font-weight:bold">无可达路径</div></div>';
+    return;
+  }
+  var parts=result.split(',');var dist=parseInt(parts[0]);var path=[];
+  for(var i=1;i<parts.length;i++)path.push(parseInt(parts[i]));
+  drawPath(path,dist);
+}
+
+//C++ WebAssembly版DFS
+function runDFS(){
+  if(!ModuleReady||selectedStart===null||selectedEnd===null){alert('请先选择起点和终点');return;}
+  var s=selectedStart,e=selectedEnd;
+  var resultPtr=Module.ccall('findAllPaths','number',['number','number','number'],[currentMode,s,e]);
+  var result=Module.UTF8ToString(resultPtr);
+  if(result==='EMPTY'){document.getElementById('result-panel').innerHTML+='<div style="background:#fcebeb;border-color:#f09595;border-radius:8px;padding:8px;margin-top:8px;font-size:12px;color:#e24b4b">无可达路径</div>';return;}
+  var all=result.split('|');var maxShow=20;
+  var html='<div style="background:#f0f8ff;border:1px solid #b5d4f4;border-radius:8px;padding:10px;font-size:11px;line-height:1.6;max-height:200px;overflow-y:auto">';
+  html+='<div style="font-weight:bold;margin-bottom:4px;color:#185fa5">共'+all.length+'条路径'+(all.length>maxShow?('，显示前'+maxShow+'条'):'')+'</div>';
+  for(var i=0;i<all.length&&i<maxShow;i++){
+    var parts=all[i].split(':');var nodes=parts[0].split('-');var d=parts[1];
+    html+=(i+1)+'. ';
+    for(var j=0;j<nodes.length;j++){html+=spots[parseInt(nodes[j])].name;if(j<nodes.length-1)html+=' → ';}
+    html+=' <span style="color:#999">('+d+')</span><br>';
+  }
+  html+='</div>';document.getElementById('result-panel').innerHTML+=html;
+}
+
+function drawPath(path,dist){
+  var layer=document.getElementById('path-layer');layer.innerHTML='';
+  var pts='';for(var i=0;i<path.length;i++){pts+=spots[path[i]].x+','+spots[path[i]].y;if(i<path.length-1)pts+=' ';}
+  layer.innerHTML+='<polyline points="'+pts+'" fill="none" stroke="#f5c4b3" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>';
+  layer.innerHTML+='<polyline points="'+pts+'" fill="none" stroke="#e24b4b" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>';
+  for(var i=0;i<path.length-1;i++){var mx=(spots[path[i]].x+spots[path[i+1]].x)/2,my=(spots[path[i]].y+spots[path[i+1]].y)/2;layer.innerHTML+='<circle cx="'+mx+'" cy="'+my+'" r="4" fill="#fff" stroke="#e24b4b" stroke-width="2"/>';}
+  var html='<div class="result-box"><div class="dist">'+dist+'</div><div style="color:#999;font-size:11px;margin-bottom:8px">最短距离 (C++ WASM引擎)</div><div style="font-size:13px;line-height:1.6">';
+  for(var i=0;i<path.length;i++){if(i>0)html+='<span style="color:#d85a30;margin:0 4px">→</span>';html+='<strong>'+spots[path[i]].name+'</strong>';}
+  html+='</div></div>';document.getElementById('result-panel').innerHTML=html;
+  updateUI();updateRoadDisplay();
+}
+
+function resetAll(){
+  selectedStart=null;selectedEnd=null;
+  document.getElementById('lbl-start').textContent='未选择';
+  document.getElementById('lbl-end').textContent='未选择';
+  document.getElementById('result-panel').innerHTML='<div class="hint">点击地图上的景点选择起点和终点</div>';
+  document.getElementById('path-layer').innerHTML='';
+  document.getElementById('spot-info').style.display='none';
+  updateUI();updateRoadDisplay();
+}
+</script>
+</body>
+</html>
